@@ -20,9 +20,9 @@ const VideoCall = () => {
 
     const iceServers = {
         iceServers: [
-            { urls: 'stun:hideeer.p-e.kr:3478' },
+            { urls: 'stun:stun.l.google.com:19302' },
             {
-                urls: 'turn:hideeer.p-e.kr:3478',
+                urls: 'turn:https://hideeer.p-e.kr:3478',
                 username: "testuser",
                 credential: "testpassword"
             }
@@ -38,31 +38,22 @@ const VideoCall = () => {
             socketRef.current.emit('join-room', roomId);
         });
 
-        socketRef.current.on('offer', (data) => {
-            console.log('Offer received:', data);
-            handleOffer(data);
-        });
+        socketRef.current.on('offer', handleOffer);
+        socketRef.current.on('answer', handleAnswer);
+        socketRef.current.on('ice-candidate', handleRemoteIceCandidate);
+        socketRef.current.on('disconnect', handleDisconnect);
+        socketRef.current.on('error', handleError);
+    };
 
-        socketRef.current.on('answer', (data) => {
-            console.log('Answer received:', data);
-            handleAnswer(data);
-        });
+    const handleDisconnect = () => {
+        console.log('WebSocket connection closed');
+        setCallStatus('WebSocket 연결 종료. 재연결 시도 중...');
+        setTimeout(connectWebSocket, 3000);
+    };
 
-        socketRef.current.on('ice-candidate', (candidate) => {
-            console.log('ICE Candidate received:', candidate);
-            handleRemoteIceCandidate(candidate);
-        });
-
-        socketRef.current.on('disconnect', () => {
-            console.log('WebSocket connection closed');
-            setCallStatus('WebSocket 연결 종료. 재연결 시도 중...');
-            setTimeout(connectWebSocket, 3000);
-        });
-
-        socketRef.current.on('error', (error) => {
-            console.error('WebSocket error:', error);
-            setCallStatus('오류 발생: ' + (error.message || '알 수 없는 오류'));
-        });
+    const handleError = (error) => {
+        console.error('WebSocket error:', error);
+        setCallStatus('오류 발생: ' + (error.message || '알 수 없는 오류'));
     };
 
     const startLocalStream = async () => {
@@ -72,6 +63,7 @@ const VideoCall = () => {
             return stream;
         } catch (err) {
             console.error('Error accessing media devices.', err);
+            setCallStatus('미디어 장치 접근 오류');
             return null;
         }
     };
@@ -106,8 +98,11 @@ const VideoCall = () => {
         if (isCallingRef.current) return;
         isCallingRef.current = true;
 
+        console.log("Starting local stream...");
         const localStream = await startLocalStream();
         if (!localStream) return;
+
+        console.log("Local stream started:", localStream);
 
         const localPeerConnection = createPeerConnection();
         localStream.getTracks().forEach(track => localPeerConnection.addTrack(track, localStream));
@@ -121,11 +116,12 @@ const VideoCall = () => {
             setCallStatus('통화 중');
         } catch (error) {
             console.error('Error creating offer:', error);
+            setCallStatus('오류 발생: 통화 시작 실패');
             isCallingRef.current = false;
         }
     };
 
-    const handleOffer = async ({ offer, sender }) => {
+    const handleOffer = async ({ offer }) => {
         if (!offer || !offer.sdp || offer.type !== 'offer') {
             console.error('Invalid offer:', offer);
             return;
@@ -142,19 +138,28 @@ const VideoCall = () => {
             console.log('Answer sent:', answer);
         } catch (error) {
             console.error('Error handling offer:', error);
+            setCallStatus('오류 발생: 제안 처리 실패');
         }
     };
 
     const handleAnswer = async ({ answer }) => {
         if (!localConnection) {
             console.error('Local connection is not established');
+            setCallStatus('오류 발생: 로컬 연결이 없습니다');
             return;
         }
 
         try {
             await localConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            candidateQueue.current.forEach(candidate => {
+                localConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => {
+                    console.error('Error adding queued ICE candidate:', err);
+                });
+            });
+            candidateQueue.current = [];
         } catch (error) {
             console.error('Error handling answer:', error);
+            setCallStatus('오류 발생: 응답 처리 실패');
         }
     };
 
@@ -165,6 +170,7 @@ const VideoCall = () => {
             });
         } else {
             candidateQueue.current.push(candidate);
+            console.log("Candidate queued:", candidate);
         }
     };
 
@@ -199,8 +205,10 @@ const VideoCall = () => {
     return (
         <div>
             <h2>Video Call</h2>
-            <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '300px' }} />
-            <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '300px' }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <video ref={localVideoRef} autoPlay playsInline muted style={{ width: '300px', border: '1px solid black' }} />
+                <video ref={remoteVideoRef} autoPlay playsInline style={{ width: '300px', border: '1px solid black' }} />
+            </div>
             <p>{callStatus}</p>
             <button onClick={startCall}>통화 시작</button>
             <button onClick={stopCall}>통화 종료</button>
